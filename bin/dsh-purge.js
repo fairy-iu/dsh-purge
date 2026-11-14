@@ -24,10 +24,16 @@ function printStatus(state) {
   out.push(`  注入文件       ${state.override_path}`);
   out.push(`  注入状态       ${state.override_status}`);
   out.push("");
-  out.push(`  补丁 ${state.patches_applied}/${core.ALL_PATCHES.length} 已清洗, ${state.patches_pending} 待清洗`);
+  // 分母必须和分子同口径：patches_total 只数「这台机器上适用且不是 na」的补丁。
+  // 以前分子用 patches_applied、分母用 ALL_PATCHES.length，才会出现 67/82 这种自相矛盾的行。
+  const naNote = state.patches_na ? `, ${state.patches_na} 不适用` : "";
+  const skipNote = state.patches_skipped ? `, ${state.patches_skipped} 跳过` : "";
+  out.push(`  补丁 ${state.patches_applied}/${state.patches_total} 已清洗, ${state.patches_pending} 待清洗${skipNote}${naNote}`);
+  out.push(`  分组  ${state.display_applied}/${state.display_total}（同一组补丁合并成一行显示，故与上面的逐条总数不同）`);
+  const marks = { applied: "✓", pending: "✗", skipped: "!", missing_file: "?" };
   for (const p of core.ALL_PATCHES) {
-    const s = state.patch_status[p.id];
-    const mark = s === "applied" ? "✓" : s === "pending" ? "✗" : "·";
+    const s = state.patch_status[p.id] || "unknown";
+    const mark = marks[s] || "·";
     out.push(`    ${mark} [#${String(p.id).padEnd(2)}] ${p.name.padEnd(30)} ${p.layer}/${p.layer_en} — ${s}`);
   }
   out.push("");

@@ -184,6 +184,7 @@ window.__ModuleLoader__.load({ id: "dsh-purge", factory: (require) => {
 			"metric.pendingShort": "待处理 {n}",
 			"metric.unmatchedShort": "没对上 {n}",
 			"metric.skipShort": "跳过 {n}",
+			"metric.naShort": "不适用 {n}",
 			"metric.unlocated.count": "—",
 			"metric.shim": "shim",
 			"metric.shim.na": "本端不需要",
@@ -524,6 +525,7 @@ window.__ModuleLoader__.load({ id: "dsh-purge", factory: (require) => {
 			"metric.pendingShort": "Pending {n}",
 			"metric.unmatchedShort": "No match {n}",
 			"metric.skipShort": "Skipped {n}",
+			"metric.naShort": "N/A {n}",
 			"metric.unlocated.count": "—",
 			"metric.shim": "shim",
 			"metric.shim.na": "Not needed here",
@@ -1106,6 +1108,13 @@ body:not([data-ds-dark-theme]) .dshp-auth-ops button.primary{background:var(--ds
 
 		function patchRowsOf(state) {
 			if (!state || !state.ai_base) return [];
+			// 逐条口径优先：一条补丁一行，百分比才和 CLI --status 的 67/67 对齐。
+			// （state.patches 是分组行，一组可能含多个补丁，只用来渲染分组标题。）
+			if (Array.isArray(state.patch_rows) && state.patch_rows.length) {
+				return state.patch_rows
+					.map((p) => ({ id: Number(p.id), st: p.status || "missing_file", layer: p.layer || "" }))
+					.filter((r) => r.st && r.st !== "na" && Number.isFinite(r.id));
+			}
 			const fromList = Array.isArray(state.patches) ? state.patches : null;
 			const rows = fromList
 				? fromList.map((p) => ({
@@ -1153,6 +1162,7 @@ body:not([data-ds-dark-theme]) .dshp-auth-ops button.primary{background:var(--ds
 				if (tally.pending) notes.push(t("metric.pendingShort", { n: tally.pending }));
 				if (tally.unmatched) notes.push(t("metric.unmatchedShort", { n: tally.unmatched }));
 				if (tally.skipped) notes.push(t("metric.skipShort", { n: tally.skipped }));
+				if (state && state.patches_na) notes.push(t("metric.naShort", { n: state.patches_na }));
 				const expanded = !!open[key];
 				return h("div", { key: key, className: "dshp-group" },
 					h("button", {
@@ -1836,6 +1846,7 @@ body:not([data-ds-dark-theme]) .dshp-auth-ops button.primary{background:var(--ds
 			if (tally.pending) metricNotes.push(t("metric.pendingShort", { n: tally.pending }));
 			if (tally.unmatched) metricNotes.push(t("metric.unmatchedShort", { n: tally.unmatched }));
 			if (tally.skipped) metricNotes.push(t("metric.skipShort", { n: tally.skipped }));
+			if (s && s.patches_na) metricNotes.push(t("metric.naShort", { n: s.patches_na }));
 
 			const versions = (updateInfo && updateInfo.versions) || [];
 			const channelNow = (updateInfo && updateInfo.channel) || channel || "stable";
@@ -4038,25 +4049,27 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(req),
-    }).then(async (res) => {
-      const text = await res.text().catch(() => '')
-      let data = null
-      try { data = text ? JSON.parse(text) : null } catch {
-        return { ok: false, error: res.status + ' non-json: ' + String(text).slice(0, 120) }
-      }
-      if (!res.ok) {
-        return Object.assign({}, data || {}, {
-          ok: false,
-          error: (data && (data.error || data.message)) || (res.status + ' ' + res.statusText),
-        })
-      }
-      return data
-    })
+    }).then((res) => res.json())
 
-    let ui = { open: true, tab: 'assets' }
+    /* 面板开关与当前页签记到 localStorage：刷新/切窗口后回到原处，
+       不用每次点开都从「资产测绘」重新找起。只持久化这两个字段，
+       拖动出来的位置另有 rt-dock-geom-v1 管。 */
+    const UI_STATE_KEY = 'rt-ui-v1'
+    const loadUIState = () => {
+      try {
+        const raw = JSON.parse(window.localStorage.getItem(UI_STATE_KEY) || 'null')
+        if (raw && typeof raw === 'object') {
+          return { open: raw.open !== false, tab: typeof raw.tab === 'string' && raw.tab ? raw.tab : 'assets' }
+        }
+      } catch (e) { /* 隐私模式或坏数据：用默认值 */ }
+      return { open: true, tab: 'assets' }
+    }
+    let ui = loadUIState()
     const subs = new Set()
     const setUI = (patch) => {
       ui = Object.assign({}, ui, patch)
+      /* 只把"在哪个页签、开着没"写进本地存储；其它字段（例如 pending）随会话走，不落盘 */
+      try { window.localStorage.setItem(UI_STATE_KEY, JSON.stringify({ open: ui.open !== false, tab: ui.tab })) } catch (e) { /* 隐私模式 */ }
       const snap = Object.assign({}, ui)
       for (const f of Array.from(subs)) {
         try { f(snap) } catch { /* ignore subscriber errors */ }
@@ -5571,8 +5584,7 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
           a.href = url
           a.download = 'report-' + String(label || 'score').replace(/[^\w.\-]/g, '_') + '.md'
           a.click()
-          /* 立刻 revoke 会在部分浏览器里让 click 启动的下载断流,延后一拍 */
-          setTimeout(() => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } }, 1000)
+          URL.revokeObjectURL(url)
           setMsg({ ok: '已下载：' + label })
         } catch (e) { setMsg({ err: '下载失败：' + ((e && e.message) || e) }) }
       }
@@ -7051,6 +7063,7 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
       const eng = props.engagement
       const refreshKey = props.refreshKey || 0
       const [roles, setRoles] = React.useState(null)
+      const [builtin, setBuiltin] = React.useState(false)
       const [err, setErr] = React.useState(null)
       const [concurrency, setConcurrency] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
@@ -7062,6 +7075,7 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
           if (!r || r.ok === false) { setErr((r && r.error) || '读取失败'); return }
           setErr(null)
           if (r.roles) setRoles(r.roles)
+          setBuiltin(Boolean(r.builtin))
         }, (e) => { setBusy(false); setErr(String((e && e.message) || e)) })
         /* 并发名额按"当前跑着的子智能体"算；host 侧读 subagents 注册表 */
         api({ op: 'agentsStatus' }).then((r) => {
@@ -7072,6 +7086,24 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
 
       const used = concurrency ? concurrency.used : null
       const max = concurrency ? concurrency.max : 3
+      const free = used === null ? null : Math.max(max - used, 0)
+      const list = roles || []
+
+      /* 角色状态表：这一页以前只读角色提示词却从不显示，
+         看不出"提示词改了没、有几个是随包默认"。现在按角色列出
+         自定义状态 + 字数 + 最近修改，改没改一眼可见。 */
+      const roleRow = (r) => {
+        const content = String(r.content || '')
+        const custom = Boolean(r.updated_at)
+        return h('div', { key: 'role-' + r.role, className: 'rt-kv', style: { alignItems: 'baseline' } },
+          h('b', null, ROLE_LABEL[r.role] || r.title || r.role),
+          h('span', { className: 'rt-tag' + (custom ? ' rt-tag-live' : '') }, custom ? '已自定义' : '随包默认'),
+          r.planner ? h('span', { className: 'rt-tag rt-tag-passive' }, '只派活不动手') : null,
+          h('span', { style: { flex: 1 } }),
+          h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)' } },
+            content ? content.length + ' 字' : '空（会走内置默认）'),
+          custom ? h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)' } }, fmt(r.updated_at)) : null)
+      }
       return h('div', { className: 'rt-main' },
         h('div', { className: 'rt-toolbar' },
           h('span', { style: { fontWeight: 600 } }, '作战智能体'),
@@ -7084,8 +7116,14 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
         h('div', { className: 'rt-pane' },
           err ? h('div', { className: 'rt-err' }, err) : null,
           h('div', { className: 'rt-card' },
-            h('h4', null, '并发规则（硬约束）'),
+            h('h4', null, '现在能不能派活'),
             h('div', { style: { fontSize: 12, lineHeight: 1.7 } },
+              free === null
+                ? '· 读不到并发占用（host 未返回名额状态），派活前先调 `redteam_agent_slot` action=status 确认。'
+                : free > 0
+                  ? '· 还有 ' + free + ' 个名额（上限 ' + max + '，在跑 ' + used + '），可以派活。'
+                  : '· **名额已满**（' + used + '/' + max + '）：等现有智能体回报，不要重试硬塞。',
+              h('br'),
               '· 同一靶标**同时最多 ' + max + ' 个执行智能体**；主会话派活前用 `redteam_agent_slot` 占位，满了直接拒绝。',
               h('br'),
               '· **默认一个一个派、按顺序推进**；只有确实互不依赖的活才并行。',
@@ -7100,6 +7138,15 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
               '④ 漏洞利用 `exploit` —— 先拿服务器权限（冰蝎/哥斯拉马）+ 建 suo5 隧道，再打其它得分项', h('br'),
               '⑤ 内网渗透 `internal` —— 走隧道，依次拉起 ①②③④ 做内网', h('br'),
               '⑥ 主会话 `plan` —— 只做计划、派活、汇总、汇报，不动手')),
+          h('div', { className: 'rt-card' },
+            h('h4', null, '角色提示词状态'),
+            builtin
+              ? h('div', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6 } },
+                  '还没选靶标：下面是随包默认提示词，改不动；选/建一个靶标后才会按靶标各存一份。')
+              : null,
+            list.length
+              ? h('div', { style: { fontSize: 12 } }, list.map(roleRow))
+              : h('div', { className: 'rt-empty' }, '还没有读到角色提示词')),
           h(ConcurrencyCard, { concurrency, onSaved: load }),
           h('div', { className: 'rt-card' },
             h('h4', null, '角色提示词（按靶标存，可在这里编辑）'),
@@ -7167,17 +7214,6 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
       const [open, setOpen] = React.useState(false)
       const [msg, setMsg] = React.useState(null)
       const [countdown, setCountdown] = React.useState(0)
-      const countdownRef = React.useRef(null)
-      const clearCountdown = React.useCallback(() => {
-        if (countdownRef.current) { try { clearInterval(countdownRef.current) } catch { /* ignore */ } }
-        countdownRef.current = null
-      }, [])
-      React.useEffect(() => () => clearCountdown(), [clearCountdown])
-      const closeModal = React.useCallback(() => {
-        clearCountdown()
-        setCountdown(0)
-        setOpen(false)
-      }, [clearCountdown])
 
       const check = (silent) => {
         if (!silent) setBusy(true)
@@ -7208,10 +7244,9 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
           setMsg({ ok: '已安装 ' + (r.installed || '') + '，正在重启当前宿主…' })
           /* 重启会断开这个页面：倒计时提示用户稍后刷新 */
           setCountdown(6)
-          clearCountdown()
-          countdownRef.current = setInterval(() => {
+          const t = setInterval(() => {
             setCountdown((n) => {
-              if (n <= 1) { clearCountdown(); window.location.reload(); return 0 }
+              if (n <= 1) { clearInterval(t); window.location.reload(); return 0 }
               return n - 1
             })
           }, 1000)
@@ -7243,7 +7278,7 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
               title: '重新检查 npm 上的最新版本',
             }, busy ? '检查中…' : '检查更新'),
         open
-          ? h('div', { className: 'rt-modal', 'aria-hidden': 'true', onClick: closeModal },
+          ? h('div', { className: 'rt-modal', 'aria-hidden': 'true', onClick: () => setOpen(false) },
               h('div', { className: 'rt-modal-box', onClick: (e) => e.stopPropagation() },
                 h('h4', { style: { marginTop: 0 } }, '更新 RedTeam 模式'),
                 h('div', { className: 'rt-kv' }, h('b', null, '当前版本'), h('span', null, current || '未知')),
@@ -7269,7 +7304,7 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
                   ? h('div', { className: 'rt-foot' }, '宿主正在重启，' + countdown + ' 秒后自动刷新页面…')
                   : null,
                 h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 } },
-                  h('button', { className: 'rt-btn', onClick: closeModal }, '关闭'),
+                  h('button', { className: 'rt-btn', onClick: () => setOpen(false) }, '关闭'),
                   h('button', {
                     className: 'rt-btn rt-btn-primary',
                     disabled: busy || blockers.length > 0 || mode === 'dev',
@@ -7335,6 +7370,22 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
         if (raw && typeof raw === 'object') return clampRtGeom(raw)
       } catch (e) { /* 隐私模式或坏数据 */ }
       return defaultRtGeom()
+    }
+
+    /** 演练台页签：id → 标题。顺序即页签栏顺序（按演练推进的时间顺序排）。 */
+    const RT_TABS = [
+      ['assets', '资产测绘'], ['testing', '正在测试'], ['env', '环境适配'], ['agents', '智能体'],
+      ['sessions', '会话隧道'],
+      ['findings', '漏洞战果'], ['attackfiles', '攻击文件'],
+      ['chain', '攻击链'], ['scores', '得分目标'], ['report', '报告'],
+      ['knowledge', '知识库'],
+      ['skills', '技能库'],
+    ]
+    /** 不依赖靶标就能看的页签（知识库跨靶标共享；环境适配 / 技能库 / 智能体是全局配置）。 */
+    const RT_GLOBAL_TABS = ['knowledge', 'env', 'skills', 'agents']
+    const RT_TAB_NAME = (id) => {
+      const hit = RT_TABS.find((t) => t[0] === id)
+      return hit ? hit[1] : id
     }
 
     function Panel(props) {
@@ -7501,13 +7552,12 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
       }
 
       const stats = (snapshot && snapshot.stats) || {}
-      const tabs = [
-        ['assets', '资产测绘'], ['env', '环境适配'], ['agents', '智能体'], ['sessions', '会话隧道'],
-        ['findings', '漏洞战果'],
-        ['chain', '攻击链'], ['scores', '得分目标'], ['report', '报告'],
-        ['knowledge', '知识库'],
-        ['skills', '技能库'],
-      ]
+      const tabs = RT_TABS
+      /* 上次停在已下线的页签（例如老版本的 prompts）时落回资产测绘，
+         否则页签栏一个都不高亮、正文显示「未知页签」。 */
+      React.useEffect(() => {
+        if (!tabs.some((t) => t[0] === st.tab)) setUI({ tab: 'assets' })
+      }, [st.tab])
       const full = isFullWindow()
       const openFull = () => {
         try { window.open(window.location.href.split('#')[0] + '#redteam-full', '_blank', 'noopener') } catch (e) { setErr('无法打开新窗口：' + ((e && e.message) || e)) }
@@ -7537,6 +7587,8 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
       else if (st.tab === 'skills') body = h(SkillsTab, { refreshKey: refreshKey })
       else if (st.tab === 'agents' || st.tab === 'prompts') body = h(AgentsTab, { engagement: eng, refreshKey: refreshKey })
       else if (!eng) {
+        /* 没有靶标：除了建靶标，还要把「不用靶标也能先干的活」摆出来。
+           原来这里只有一个创建输入框，用户会以为知识库 / 环境适配都得先建靶标。 */
         body = h('div', { className: 'rt-pane' },
           h('div', { className: 'rt-card' },
             h('h4', null, '还没有靶标'),
@@ -7549,14 +7601,28 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
                 onKeyDown: (e) => { if (e.key === 'Enter') openEngagement() },
               }),
               h('button', { className: 'rt-btn rt-btn-primary', disabled: creating, onClick: () => openEngagement() },
-                creating ? '创建中…' : '创建靶标'))))
+                creating ? '创建中…' : '创建靶标'))),
+          h('div', { className: 'rt-card' },
+            h('h4', null, '不用靶标也能先做的事'),
+            h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 8 } },
+              '下面这几个页签是全局的、跨靶标共享，建靶标之前就可以先收拾好：'),
+            h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+              RT_GLOBAL_TABS.map((id) => h('button', {
+                key: id, className: 'rt-btn',
+                title: '打开「' + RT_TAB_NAME(id) + '」（不需要靶标）',
+                onClick: () => { setUI({ tab: id }); setRefreshKey((k) => k + 1) },
+              }, RT_TAB_NAME(id)))),
+            h('div', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)', marginTop: 8 } },
+              '建完靶标之后，'
+              + RT_TABS.filter((t) => RT_GLOBAL_TABS.indexOf(t[0]) < 0).map((t) => RT_TAB_NAME(t[0])).join(' / ')
+              + ' 这些页签才会有内容。')))
       } else if (st.tab === 'assets') body = h(AssetsTab, { engagement: eng, snapshot: snapshot, refreshKey: refreshKey, onRefresh: refreshAll, onData: () => loadSnapshot(eng) })
-      else if (st.tab === 'testing') body = h(AssetsTab, { engagement: eng, snapshot: snapshot, refreshKey: refreshKey, onRefresh: refreshAll, onData: () => loadSnapshot(eng) })
+      else if (st.tab === 'testing') body = h(TestingTab, { engagement: eng, refreshKey: refreshKey })
       else if (st.tab === 'sessions') body = h(SessionTab, { engagement: eng, refreshKey: refreshKey })
       else if (st.tab === 'findings') body = h(FindingsTab, { engagement: eng, refreshKey: refreshKey })
       else if (st.tab === 'chain') body = h(ChainTab, { engagement: eng, refreshKey: refreshKey })
       else if (st.tab === 'report') body = h(ReportTab, { engagement: eng, refreshKey: refreshKey })
-      else if (st.tab === 'attackfiles') body = h(FindingsTab, { engagement: eng, refreshKey: refreshKey })
+      else if (st.tab === 'attackfiles') body = h(AttackFilesTab, { engagement: eng, refreshKey: refreshKey })
       else if (st.tab === 'scores') body = h(ScoreTab, { engagement: eng, refreshKey: refreshKey })
       else body = h('div', { className: 'rt-empty' }, '未知页签')
 
@@ -7609,7 +7675,25 @@ body[data-ds-dark-theme] .dshp-rewind-item span{color:var(--dsw-alias-label-tert
           (full || embedded) ? null : h('button', { className: 'rt-btn', title: '收起面板', onClick: () => setUI({ open: false }) }, '收起')),
         /* 页签栏用标准 tablist/tab 角色：读屏软件据此播报「第几个页签、是否选中」。
            键盘用户 Tab 进来后可用 Enter/Space 切换（由 clickable 提供）。 */
-        h('div', { className: 'rt-tabs', role: 'tablist' }, tabs.map((t) => {
+        h('div', {
+          className: 'rt-tabs',
+          role: 'tablist',
+          /* 标准 tablist 键盘行为：左右方向键切换、Home/End 跳首尾。
+             以前只能用鼠标点，键盘用户没法换页签。 */
+          onKeyDown: (e) => {
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return
+            e.preventDefault()
+            const cur = Math.max(0, tabs.findIndex((t) => t[0] === st.tab))
+            const last = tabs.length - 1
+            const next = e.key === 'Home' ? 0
+              : e.key === 'End' ? last
+                : e.key === 'ArrowLeft' ? (cur <= 0 ? last : cur - 1)
+                  : (cur >= last ? 0 : cur + 1)
+            markTabSeen(tabs[next][0])
+            setUI({ tab: tabs[next][0] })
+            setRefreshKey((k) => k + 1)
+          },
+        }, tabs.map((t) => {
           const activate = () => {
             markTabSeen(t[0])
             setUI({ tab: t[0] })

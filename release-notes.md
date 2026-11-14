@@ -1,3 +1,23 @@
+# 1.1.73
+
+## 中文
+
+- 版本 **1.1.73**。对齐 0.9.x 的 DSH 目录结构，补回 12 条失效补丁，演练台功能补齐。
+- 补丁锚点重建：#14 提权审批（`dsh-sandbox`）、#17 文件观察策略、#60 run_code 审批文案（已搬到 `dsh-tool-executor-ptc`）、#62 审批通道缺失时 fail-open（`dsh-tools/lib/pipeline.js`）、#32/#53 Web GUI 身份文案（已搬到 `dsh-harness-dev-context`）、#54 deliverable 提示（已搬到 `dsh-deliverable-file-references`）、#67 / #74 / #77 缩进与上下文漂移。
+- `targetFiles()` 新增 5 个包映射：`deliverable-file-references`、`harness-dev-context`、`tool-executor-ptc`、`dsh-tools-pipeline`、`dsh-tools-pipeline-types`。
+- 宿主定位修复：优先读 `DSH_DESKTOP_INSTALL` 或 `$DSH_HOME/dsh-purge/desktop-install.txt`，不再把 `%TEMP%\dsh_extract` 里的旧解包副本当成宿主。
+- 计数口径统一：CLI / HTTP / UI 三处都按逐条统计；分组显示另给 `display_*` 字段并注明差异；逐条列表区分 `✓ / ✗ / ! / ?`。
+- 演练台：补进「正在测试」「攻击文件」两个页签（此前被路由到资产测绘 / 漏洞战果）；页签栏支持方向键 / Home / End；记住上次打开的页签；没有靶标时多给一张「不用靶标也能先做的事」卡片；智能体页补上角色提示词状态与并发余量。
+
+## English
+
+- **1.1.73**. Realigns with the 0.9.x DSH layout, restores 12 stale patches, and fills in the drill console.
+- Rebuilt anchors: #14 escalation approval, #17 fs observation policy, #60 run_code approval copy (moved to `dsh-tool-executor-ptc`), #62 fail-open when no approval channel (now `dsh-tools/lib/pipeline.js`), #32/#53 web GUI identity copy (moved to `dsh-harness-dev-context`), #54 deliverable prompt (moved to `dsh-deliverable-file-references`), plus indentation/context drift for #67, #74, #77.
+- `targetFiles()` gains 5 package mappings: `deliverable-file-references`, `harness-dev-context`, `tool-executor-ptc`, `dsh-tools-pipeline`, `dsh-tools-pipeline-types`.
+- Host resolution fixed: the desktop install pointer (`DSH_DESKTOP_INSTALL` or `$DSH_HOME/dsh-purge/desktop-install.txt`) wins, so a stale `%TEMP%\dsh_extract` copy is never treated as the host.
+- One counting rule everywhere: CLI, HTTP and UI all report per-patch numbers; grouped rows get separate `display_*` fields with a note, and the per-patch list distinguishes `✓ / ✗ / ! / ?`.
+- Drill console: "testing" and "attack files" tabs are wired in again (they rendered the assets/findings components before); the tab strip supports arrows / Home / End; the last tab is remembered; an extra "what you can do without a target" card appears when no engagement exists; the agents page shows prompt status and concurrency headroom.
+
 # 1.1.72
 
 ## 中文
